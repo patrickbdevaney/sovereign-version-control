@@ -509,6 +509,107 @@ Note that a remote target replaces the local one. To keep both, run
 `backup.sh` twice with different `RESTIC_REPOSITORY` values, or keep the local
 repository as the fast restore path and the remote as disaster recovery.
 
+## Why the tailnet is load-bearing
+
+The mesh VPN is not a convenience wrapped around this design — it is what makes
+the design possible. Three properties do the work.
+
+**One name that is correct everywhere.** The client config names a single host.
+At home it resolves over the LAN; from a hotel it resolves over the mesh. There
+is no split-horizon DNS, no dynamic DNS, no "work" versus "home" remote, and no
+VPN to toggle. `git push` is the same command in both places, which means the
+client tooling has no location logic in it at all.
+
+**Real TLS on a private host.** A public CA will not issue a certificate for
+`192.168.x.x`, because nobody can prove ownership of a name that is not
+globally unique. Tailscale issues a genuine, publicly-trusted certificate for
+the `*.ts.net` name of a machine that is not publicly reachable. That is an
+unusual combination: browsers and `curl` are satisfied with no warnings, no
+private CA, and no certificate installed on every client — while the host stays
+unreachable from the internet.
+
+**Authentication moved off the network perimeter.** Nothing is exposed by
+position. There is no port forward to misconfigure, no dynamic DNS record
+pointing at your house, and no login page facing the internet to be scanned.
+Reachability is a property of *device identity* in the tailnet, not of being on
+the right subnet. The firewall then narrows it further: LAN subnet plus
+`tailscale0`, deny by default.
+
+The residual risk moves with it. It is no longer "someone finds my open port";
+it is "someone gets a device onto my tailnet". That is a smaller and much more
+controllable surface — but it is a different thing to defend, and worth knowing
+you have chosen it.
+
+## How this was built: two agents, two repositories
+
+This system was built by two separate Claude Code instances — one on the forge
+host (this repository), one on the client laptop
+([sovereign-version-control-client](https://github.com/patrickbdevaney/sovereign-version-control-client)).
+Separate machines, separate context windows, no shared memory, no direct
+channel between them. They coordinated entirely through public git.
+
+It is worth writing down what actually made that work, because the failure
+modes are not the ones people expect.
+
+**The repository is the interface.** Neither agent could see the other's
+reasoning, prior turns, or intentions. Source, commit messages, and this README
+were the whole communication channel. That constraint is a feature: it forces
+the artifact to be self-explanatory, which is the same property that makes it
+useful to a human six months later. A design decision that lives only in an
+agent's context window does not survive contact with a second agent — or with
+your future self.
+
+**Different vantage points find different defects.** The most consequential bug
+in this repository was found by the *client* agent reading the server code
+cold. The backup schedule had been changed from nightly to hourly without
+revisiting the retention policy — and `restic forget --keep-daily` keeps only
+the last snapshot of each day, so every hourly run silently discarded the
+previous hour. Hourly backups with no intra-day history: precisely useless in
+the situation they exist for. The agent that made the change did not see it.
+An agent reading the result, without the assumptions accumulated while writing
+it, saw it immediately. Six further defects surfaced the same way — a template
+pointing at the wrong storage provider, a staleness alert calibrated to the old
+schedule, a unit file describing itself as "Nightly", a referenced script that
+did not exist, a hardcoded path from a different install layout, and a config
+setting that was inert because its two enabling flags were never set.
+
+**Verification asymmetry is the discipline that makes it safe.** Each side
+could only test its own half: the client agent could exercise `git push` and
+the client scripts; only the forge host could query the live API, inspect
+systemd, or run a restore. The rule that kept this honest was stating plainly
+what had been *verified* versus what was *inferred*, and refusing to close a
+finding on inference alone. "Not yet verified: my token lacks the scope, so I
+have not watched a repo appear under the org" was far more useful than a
+confident guess would have been — it named exactly the experiment the other
+side could run. It was then run here, as a controlled A/B: identical requests,
+one token with `write:organization` and one without, 201 versus 403.
+
+**Both agents were wrong about things.** This is not a story about
+infallibility. Over the course of the build: a secret-scanning rule was written
+with a regex feature the engine does not support, which made the scanner crash
+in a way that read as a pass; a diagnostic printed enough of a credential to
+require rotating it; a validation step rejected perfectly good database dumps
+because it fed seekable-only input through a pipe; and a package installed to
+persist firewall rules silently uninstalled the firewall. Every one of those
+was caught by *running* the thing rather than reading it, or by the other agent
+looking at the result. Neither instance should be trusted to certify its own
+work, and the cross-audit is not a formality.
+
+**The human is the integration point.** Nothing here was autonomous
+coordination. A person routed findings between two agents, decided which side
+should absorb a mismatch — the organisation-namespace gap was fixed in the
+client rather than by constraining the server, so repository layout stayed a
+choice rather than an artifact of a script's endpoint — and made the calls that
+were about preference rather than correctness. The agents did the work and
+checked each other; the direction was human.
+
+The transferable shape, if you want to reproduce it: **give each agent a
+separate repository with a real boundary between them, make the interface
+public and self-describing, have each audit the other's artifact rather than
+its claims, and require that anything unverified is labelled as such.** Two
+agents with different vantage points and a shared artifact catch materially
+more than one agent with twice the context.
+
 ## Restoring onto a new machine
 
 1. Install Docker and restic; clone this repository.
