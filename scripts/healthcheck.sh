@@ -95,12 +95,16 @@ else
 fi
 
 # --- 6. still private -------------------------------------------------------
-if tailscale funnel status 2>&1 | grep -qi 'no serve config\|Funnel is not'; then
-  ok "Tailscale Funnel not configured (instance is not public)"
-elif tailscale funnel status 2>&1 | grep -qiE '^https://.*\.ts\.net'; then
-  bad "Tailscale FUNNEL APPEARS ACTIVE - this host may be publicly reachable"
+# Use the JSON AllowFunnel map, not the human-readable text. `tailscale funnel
+# status` prints the https:// URL even for a tailnet-ONLY serve, so grepping it
+# reports a public exposure that does not exist. AllowFunnel is null (or has no
+# true entries) unless Funnel is genuinely enabled.
+FUNNEL_ON="$(tailscale serve status --json 2>/dev/null \
+  | jq -r '[(.AllowFunnel // {}) | to_entries[] | select(.value == true)] | length' 2>/dev/null)"
+if [ "${FUNNEL_ON:-0}" -eq 0 ]; then
+  ok "Tailscale Funnel not enabled (serve is tailnet-only; not public)"
 else
-  ok "Tailscale Funnel not active"
+  bad "Tailscale FUNNEL IS ENABLED on $FUNNEL_ON endpoint(s) - THIS HOST IS PUBLICLY REACHABLE"
 fi
 
 echo

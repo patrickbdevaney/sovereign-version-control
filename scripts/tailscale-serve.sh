@@ -19,9 +19,13 @@ set -a; . "$REPO_ROOT/.env"; set +a
 say() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 
 say "Refusing to proceed if Funnel is enabled"
+# Check the JSON AllowFunnel map rather than the printed text: `funnel status`
+# shows the https:// URL for a tailnet-ONLY serve too, so a text match would
+# make this script abort on its own (idempotent) second run.
+FUNNEL_ON="$(tailscale serve status --json 2>/dev/null \
+  | jq -r '[(.AllowFunnel // {}) | to_entries[] | select(.value == true)] | length' 2>/dev/null)"
 FUNNEL="$(tailscale funnel status 2>&1 || true)"
-if printf '%s' "$FUNNEL" | grep -qiE 'https://|proxy|enabled' \
-   && ! printf '%s' "$FUNNEL" | grep -qi 'no serve config'; then
+if [ "${FUNNEL_ON:-0}" -ne 0 ]; then
   echo "FATAL: Funnel appears to be configured. That exposes this host to the" >&2
   echo "public internet, which is explicitly forbidden here." >&2
   echo "Disable it with: tailscale funnel reset" >&2
