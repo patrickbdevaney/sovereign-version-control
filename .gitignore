@@ -1,0 +1,60 @@
+# ---------------------------------------------------------------------------
+# SECRETS — never commit. This repo is intended to become PUBLIC.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*secret*
+*Secret*
+*SECRET*
+*credential*
+*password*
+.restic-password
+b2_*
+authorized_keys
+id_rsa*
+id_ed25519*
+known_hosts
+
+# ---------------------------------------------------------------------------
+# FORGEJO / DATABASE DATA — must NEVER live under this repo.
+# Real data belongs at /var/lib/forgejo/{data,db}. These patterns exist only as
+# a backstop in case someone ever points a volume mount at the repo by mistake.
+# ---------------------------------------------------------------------------
+data/
+db/
+forgejo-data/
+postgres-data/
+*.sqlite
+*.sqlite3
+*.db
+*.sql
+*.dump
+app.ini
+
+# ---------------------------------------------------------------------------
+# BACKUP / RESTORE ARTIFACTS
+# ---------------------------------------------------------------------------
+restore-test/
+restore/
+*.tar
+*.tar.gz
+*.tgz
+snapshots/
+
+# ---------------------------------------------------------------------------
+# LOCAL BUILD / EDITOR ARTIFACTS
+# ---------------------------------------------------------------------------
+*.log
+*.swp
+*.bak
+*.tmp
+.DS_Store
+.idea/
+.vscode/
+__pycache__/
+node_modules/

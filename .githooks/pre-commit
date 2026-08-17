@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Pre-commit guard for a repo that is intended to become PUBLIC.
+#
+# Three independent layers, because .gitignore alone does not protect you:
+# it stops accidental `git add`, but not `git add -f`, and it does nothing
+# about a secret already written into a tracked file.
+#
+#   1. Filename blocklist   — refuse secret-bearing paths outright.
+#   2. gitleaks             — default ruleset over staged content.
+#   3. Local-value scan     — refuse to commit YOUR real LAN IP, Tailscale IP,
+#                             LAN subnet, or tailnet hostname. These are read
+#                             from the gitignored .env, so the real values
+#                             never appear in any tracked file (including this
+#                             hook or the gitleaks config).
+#
+# Install: git config core.hooksPath .githooks
+# Bypass (think hard first): git commit --no-verify
+
+set -uo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+FAIL=0
+
+red()  { printf '\033[31m%s\033[0m\n' "$*" >&2; }
+warn() { printf '\033[33m%s\033[0m\n' "$*" >&2; }
+
+STAGED="$(git diff --cached --name-only --diff-filter=ACMR)"
+[ -z "$STAGED" ] && exit 0
+
+# --- layer 1: filename blocklist -------------------------------------------
+BLOCKED='(^|/)\.env$|(^|/)\.env\.[^/]*$|\.key$|\.pem$|\.p12$|\.pfx$|(^|/)app\.ini$|\.sqlite3?$|\.dump$|(^|/)id_(rsa|ecdsa|ed25519)|(^|/)\.restic-password$'
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  if printf '%s\n' "$f" | grep -qiE "$BLOCKED"; then
+    # .env.example is the one intentional exception.
+    case "$f" in
+      .env.example) continue ;;
+    esac
+    red "BLOCKED: '$f' looks like a secret-bearing file and must not be committed."
+    FAIL=1
+  fi
+done <<< "$STAGED"
+
+# --- layer 2: gitleaks ------------------------------------------------------
+GITLEAKS="$(command -v gitleaks || echo "$HOME/.local/bin/gitleaks")"
+if [ -x "$GITLEAKS" ]; then
+  if ! "$GITLEAKS" git --staged --pre-commit --redact --no-banner \
+        --log-level warn "$REPO_ROOT"; then
+    red "BLOCKED: gitleaks found a secret in staged content."
+    FAIL=1
+  fi
+else
+  # Do not silently pass when the scanner is missing — that is exactly when a
+  # secret slips through.
+  red "BLOCKED: gitleaks not found. Install it or commit with --no-verify."
+  FAIL=1
+fi
+
+# --- layer 3: real local values ---------------------------------------------
+# Values come from the gitignored .env so they are never written down here.
+if [ -f "$REPO_ROOT/.env" ]; then
+  # shellcheck disable=SC1091
+  set -a; . "$REPO_ROOT/.env" 2>/dev/null; set +a
+
+  check_literal() {
+    local value="$1" label="$2"
+    [ -z "${value:-}" ] && return 0
+    case "$value" in
+      *x.x*|*REPLACE_ME*|*'<your'*) return 0 ;;  # placeholder, not a real value
+    esac
+    if git diff --cached -U0 | grep -F -- "$value" | grep -qv '^-'; then
+      red "BLOCKED: staged content contains your real $label ('$value')."
+      red "         Use a placeholder in tracked files; real values live in .env."
+      FAIL=1
+    fi
+  }
+
+  check_literal "${LAN_IP:-}"          "LAN IP"
+  check_literal "${TS_IP:-}"           "Tailscale IP"
+  check_literal "${LAN_SUBNET:-}"      "LAN subnet"
+  check_literal "${FORGEJO_DOMAIN:-}"  "tailnet hostname"
+
+  # The tailnet suffix on its own (e.g. tailXXXXXX.ts.net) is also identifying.
+  TAILNET_SUFFIX="$(printf '%s' "${FORGEJO_DOMAIN:-}" | sed -n 's/^[^.]*\.//p')"
+  check_literal "$TAILNET_SUFFIX" "tailnet suffix"
+else
+  warn "note: no .env found; skipping real-value scan (layers 1 and 2 still ran)."
+fi
+
+if [ "$FAIL" -ne 0 ]; then
+  red ""
+  red "Commit rejected. This repo is intended to be published publicly."
+  exit 1
+fi
+exit 0

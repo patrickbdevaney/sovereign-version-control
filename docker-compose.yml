@@ -1,0 +1,129 @@
+# Forgejo — private git forge, reachable from home LAN + Tailscale tailnet only.
+#
+# HARD RULE: no port in this file may ever bind to 0.0.0.0 or be forwarded from
+# the public internet. Every published port is pinned to an explicit host IP
+# supplied via .env (LAN_IP / TS_IP). See README.md.
+#
+# Real data lives OUTSIDE this repo, at /var/lib/forgejo/{data,db}, so that no
+# `git add` here can ever pick up repository contents or the database.
+
+name: forgejo
+
+networks:
+  # Forgejo <-> Postgres only. internal:true means no route to the host and no
+  # route to the internet. Postgres publishes no ports at all.
+  backend:
+    driver: bridge
+    internal: true
+  # Forgejo's outbound path (avatar fetches, git remote operations you initiate).
+  frontend:
+    driver: bridge
+
+services:
+  server:
+    image: codeberg.org/forgejo/forgejo:${FORGEJO_VERSION}
+    container_name: forgejo
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - backend
+      - frontend
+    environment:
+      USER_UID: "1000"
+      USER_GID: "1000"
+
+      # --- database -------------------------------------------------------
+      FORGEJO__database__DB_TYPE: postgres
+      FORGEJO__database__HOST: db:5432
+      FORGEJO__database__NAME: ${POSTGRES_DB}
+      FORGEJO__database__USER: ${POSTGRES_USER}
+      FORGEJO__database__PASSWD: ${POSTGRES_PASSWORD}
+
+      # --- server ---------------------------------------------------------
+      # HTTP_ADDR is the address INSIDE the container namespace; the host-side
+      # exposure is constrained by the `ports:` bindings below.
+      FORGEJO__server__PROTOCOL: http
+      FORGEJO__server__HTTP_ADDR: 0.0.0.0
+      FORGEJO__server__HTTP_PORT: "3000"
+      FORGEJO__server__DOMAIN: ${FORGEJO_DOMAIN}
+      FORGEJO__server__ROOT_URL: ${FORGEJO_ROOT_URL}
+      FORGEJO__server__OFFLINE_MODE: "true"
+
+      # Built-in SSH server. SSH_LISTEN_PORT is inside the container; SSH_PORT
+      # is what Forgejo advertises in clone URLs (the host-side port).
+      FORGEJO__server__START_SSH_SERVER: "true"
+      FORGEJO__server__SSH_LISTEN_HOST: 0.0.0.0
+      FORGEJO__server__SSH_LISTEN_PORT: "22"
+      FORGEJO__server__SSH_PORT: "${FORGEJO_SSH_PORT}"
+      FORGEJO__server__SSH_DOMAIN: ${FORGEJO_SSH_DOMAIN}
+      FORGEJO__server__LFS_START_SERVER: "true"
+
+      # --- secrets (from .env, chmod 600, gitignored) ----------------------
+      FORGEJO__security__SECRET_KEY: ${FORGEJO_SECRET_KEY}
+      FORGEJO__security__INTERNAL_TOKEN: ${FORGEJO_INTERNAL_TOKEN}
+      # Skip the web installer entirely. An unlocked installer reachable on the
+      # LAN is a real exposure window; the admin account is created via CLI
+      # instead (see scripts/create-admin.sh).
+      FORGEJO__security__INSTALL_LOCK: "true"
+
+      # --- hardening: private, single-admin instance -----------------------
+      FORGEJO__service__DISABLE_REGISTRATION: "true"
+      FORGEJO__service__ALLOW_ONLY_EXTERNAL_REGISTRATION: "false"
+      FORGEJO__service__REQUIRE_SIGNIN_VIEW: "true"
+      FORGEJO__service__ENABLE_CAPTCHA: "false"
+      FORGEJO__service__DEFAULT_KEEP_EMAIL_PRIVATE: "true"
+      FORGEJO__service__DEFAULT_ALLOW_CREATE_ORGANIZATION: "true"
+      FORGEJO__service__ENABLE_TIMETRACKING: "false"
+      FORGEJO__openid__ENABLE_OPENID_SIGNIN: "false"
+      FORGEJO__openid__ENABLE_OPENID_SIGNUP: "false"
+      # No federation / no discovery / no phoning home.
+      FORGEJO__federation__ENABLED: "false"
+      FORGEJO__cron.update_checker__ENABLED: "false"
+      FORGEJO__other__SHOW_FOOTER_VERSION: "false"
+      FORGEJO__repository__DEFAULT_PRIVATE: "private"
+      FORGEJO__repository__DEFAULT_PUSH_CREATE_PRIVATE: "true"
+      FORGEJO__log__LEVEL: Info
+    volumes:
+      # Data lives outside this repo. Never change these to relative paths.
+      - /var/lib/forgejo/data:/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      # Web UI: LAN interface only. Tailnet reaches this via `tailscale serve`
+      # running on the host, which dials LAN_IP:3000 locally.
+      - "${LAN_IP}:3000:3000"
+      # Git-over-SSH: bound on BOTH the LAN IP and the Tailscale IP so clones
+      # work at home and away. Never 0.0.0.0.
+      - "${LAN_IP}:${FORGEJO_SSH_PORT}:22"
+      - "${TS_IP}:${FORGEJO_SSH_PORT}:22"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/api/healthz"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  db:
+    image: postgres:${POSTGRES_VERSION}
+    container_name: forgejo-db
+    restart: unless-stopped
+    networks:
+      # backend only: no host exposure, no internet route.
+      - backend
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      - /var/lib/forgejo/db:/var/lib/postgresql/data
+    # Deliberately NO `ports:` stanza. The database must never be reachable
+    # from the host or the network.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s

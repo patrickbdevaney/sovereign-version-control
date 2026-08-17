@@ -1,0 +1,76 @@
+# Extends gitleaks' default ruleset with rules for the secret shapes this
+# specific repo could plausibly leak.
+#
+# Verified gap this closes: gitleaks' stock rules do NOT flag a database
+# connection string with an inline password (e.g. postgres://user:pw@host/db).
+# That is exactly the shape a compose file or README could leak, so it gets an
+# explicit rule here.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "db-connection-string-password"
+description = "Database connection string with inline password"
+regex = '''(?i)\b(postgres(ql)?|mysql|mariadb|mongodb(\+srv)?|redis|amqp)://[^:\s/]+:[^@\s]{6,}@'''
+tags = ["database", "credentials"]
+[rules.allowlist]
+# Placeholders in documentation are fine.
+regexes = [
+  '''://[^:]+:(REPLACE_ME|CHANGEME|changeme|password|PASSWORD|examplepw|<[^>]+>|\$\{[^}]+\})@''',
+]
+
+[[rules]]
+id = "forgejo-internal-token"
+description = "Forgejo/Gitea INTERNAL_TOKEN (JWT)"
+regex = '''(?i)internal_token\s*[:=]\s*["']?eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}'''
+tags = ["forgejo", "token"]
+
+[[rules]]
+id = "forgejo-secret-key"
+description = "Forgejo/Gitea SECRET_KEY with a real (non-placeholder) value"
+regex = '''(?i)(secret_key|internal_token)\s*[:=]\s*["']?[A-Za-z0-9+/=_-]{32,}["']?'''
+tags = ["forgejo", "secret"]
+[rules.allowlist]
+regexes = [
+  '''(?i)(secret_key|internal_token)\s*[:=]\s*["']?(REPLACE_ME[A-Z_]*|\$\{[^}]+\})''',
+]
+
+[[rules]]
+id = "restic-repo-password"
+description = "restic repository password assigned a literal value"
+# NOTE: gitleaks uses RE2, which has NO lookahead/lookbehind support. Exclusions
+# must go in an allowlist, never in the regex, or gitleaks panics at config load.
+regex = '''(?i)RESTIC_PASSWORD\s*[:=]\s*["']?[^\s"'#]{12,}'''
+tags = ["restic", "backup"]
+[rules.allowlist]
+regexes = [
+  '''(?i)RESTIC_PASSWORD\s*[:=]\s*["']?(REPLACE_ME[A-Z_]*|\$\{[^}]+\})''',
+]
+
+[[rules]]
+id = "b2-application-key"
+description = "Backblaze B2 application key"
+regex = '''(?i)b2_(account_key|application_key)\s*[:=]\s*["']?[A-Za-z0-9]{25,}'''
+tags = ["backblaze", "credentials"]
+
+[allowlist]
+description = "Global allowlist"
+# Matched against the whole line, so one entry neutralises placeholders for
+# every rule at once (per-rule allowlists match the captured secret and are
+# easy to get subtly wrong).
+regexTarget = "line"
+regexes = [
+  '''REPLACE_ME''',
+  '''CHANGEME''',
+  '''\$\{[A-Za-z_][A-Za-z0-9_]*\}''',   # ${VAR} indirection, never a literal
+  '''<your-[a-z-]+>''',                 # <your-tailnet> style placeholders
+  '''192\.168\.x\.''',                  # documented placeholder subnet
+  '''100\.x\.x\.x''',
+]
+# .env.example is placeholders by definition and is the one file meant to show
+# the shape of every secret without holding one.
+paths = [
+  '''\.env\.example$''',
+  '''\.gitleaks\.toml$''',
+]
