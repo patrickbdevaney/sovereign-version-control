@@ -3,10 +3,14 @@ Description=Nightly Forgejo backup
 Documentation=file:///opt/forgejo-infra/README.md
 
 [Timer]
-# 02:30 local time, nightly.
-OnCalendar=*-*-* 02:30:00
+# Hourly, not nightly. A nightly-only schedule leaves up to ~24h of pushed
+# work unbacked-up, which is a poor match for "I just pushed something I care
+# about". restic deduplicates, so a run with no new content uploads almost
+# nothing -- an idle run is a handful of API calls, far inside R2's free tier
+# of 1M class-A operations per month.
+OnCalendar=hourly
 # Spread load and avoid a thundering herd if other timers share the hour.
-RandomizedDelaySec=15m
+RandomizedDelaySec=10m
 # If the machine was asleep or off at 02:30, run at next boot rather than
 # silently skipping the night.
 Persistent=true
