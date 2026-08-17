@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Nightly encrypted backup of everything that has no other copy.
+# Encrypted backup of everything that has no other copy. Runs hourly; the
+# schedule lives in systemd/forgejo-backup.timer.
 #
 #   sudo ./scripts/backup.sh
 #
