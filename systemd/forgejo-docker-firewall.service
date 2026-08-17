@@ -1,0 +1,19 @@
+[Unit]
+Description=Reapply DOCKER-USER firewall rules for Forgejo
+# Docker flushes DOCKER-USER when the daemon starts, so these rules must be
+# reapplied after it -- not saved once by iptables-persistent (which on Ubuntu
+# 25.10 conflicts with, and removes, ufw).
+After=docker.service
+Requires=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=__REPO_ROOT__/scripts/docker-user-rules.sh
+User=root
+
+[Install]
+WantedBy=multi-user.target
+# Also bind to docker.service so a `systemctl restart docker` reapplies them.
+WantedBy=docker.service

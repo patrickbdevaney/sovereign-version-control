@@ -75,19 +75,24 @@ fi
 
 # --- 5. restic repo size ----------------------------------------------------
 case "$RESTIC_REPOSITORY" in
-  /*)
-    SIZE="$(du -sb "$RESTIC_REPOSITORY" 2>/dev/null | cut -f1)"
-    if [ -n "$SIZE" ]; then
-      HUMAN="$(numfmt --to=iec "$SIZE" 2>/dev/null || echo "$SIZE")"
-      if [ "$SIZE" -lt "$RESTIC_WARN_BYTES" ]; then
-        ok "restic repository $HUMAN"
-      else
-        bad "restic repository $HUMAN - above warning threshold"
-      fi
-    fi
+  /*) SIZE="$(du -sb "$RESTIC_REPOSITORY" 2>/dev/null | cut -f1)" ;;
+  *)
+    # Remote repo (B2/R2/S3): ask restic what it is actually storing. This is
+    # the number that counts against a provider's free-tier quota.
+    SIZE="$(restic stats --mode raw-data --json 2>/dev/null | jq -r '.total_size // empty')"
     ;;
-  *) ok "remote restic repository (size check skipped)" ;;
 esac
+if [ -n "${SIZE:-}" ]; then
+  HUMAN="$(numfmt --to=iec "$SIZE" 2>/dev/null || echo "$SIZE")"
+  LIMIT="$(numfmt --to=iec "$RESTIC_WARN_BYTES" 2>/dev/null || echo "$RESTIC_WARN_BYTES")"
+  if [ "$SIZE" -lt "$RESTIC_WARN_BYTES" ]; then
+    ok "restic repository $HUMAN (warn at $LIMIT)"
+  else
+    bad "restic repository $HUMAN - at or above $LIMIT threshold"
+  fi
+else
+  bad "could not determine restic repository size"
+fi
 
 # --- 6. still private -------------------------------------------------------
 if tailscale funnel status 2>&1 | grep -qi 'no serve config\|Funnel is not'; then

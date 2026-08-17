@@ -76,42 +76,27 @@ run ufw --force enable
 # DOCKER-USER: the chain that actually governs Docker-published ports.
 # ---------------------------------------------------------------------------
 say "Constraining Docker-published ports via DOCKER-USER"
-docker_user_rules() {
-  local ipt="$1" subnet="$2"
-  # Flush our previous rules so this script stays idempotent.
-  run "$ipt" -F DOCKER-USER 2>/dev/null || true
-  # Return traffic for connections we initiated must pass.
-  run "$ipt" -A DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
-  # Tailnet and LAN are permitted.
-  run "$ipt" -A DOCKER-USER -i "$TS_IF" -j RETURN
-  [ -n "$subnet" ] && run "$ipt" -A DOCKER-USER -s "$subnet" -j RETURN
-  # Traffic originating on this host (compose healthchecks, tailscale serve).
-  run "$ipt" -A DOCKER-USER -i lo -j RETURN
-  # Anything else aimed at a container port is dropped.
-  run "$ipt" -A DOCKER-USER -p tcp --dport 3000 -j DROP
-  run "$ipt" -A DOCKER-USER -p tcp --dport "$FORGEJO_SSH_PORT" -j DROP
-  run "$ipt" -A DOCKER-USER -j RETURN
-}
+run "$REPO_ROOT/scripts/docker-user-rules.sh"
 
-if command -v iptables >/dev/null; then
-  docker_user_rules iptables "$LAN_SUBNET"
-fi
-if command -v ip6tables >/dev/null; then
-  # No container port is published on IPv6 (compose binds IPv4 host IPs only),
-  # so IPv6 container traffic is dropped outright.
-  docker_user_rules ip6tables ""
-fi
-
-say "Persisting rules across reboot"
-# ufw persists itself; raw iptables rules do not. netfilter-persistent saves
-# the DOCKER-USER chain. Without this, protection silently disappears on reboot.
+say "Persisting DOCKER-USER rules across reboot and docker restarts"
+# ufw persists its own rules. The DOCKER-USER rules do not persist, and Docker
+# FLUSHES that chain every time the daemon starts -- so they need reapplying,
+# not merely saving.
+#
+# We deliberately do NOT use iptables-persistent here. On Ubuntu 25.10 that
+# package conflicts with ufw, and apt resolves the conflict by REMOVING ufw,
+# which silently leaves the host with INPUT policy ACCEPT and no filtering.
+# A systemd unit ordered after docker.service is both safer and more correct.
 if [ "$APPLY" -eq 1 ]; then
-  if ! command -v netfilter-persistent >/dev/null; then
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iptables-persistent
-  fi
-  netfilter-persistent save
+  sed "s|__REPO_ROOT__|$REPO_ROOT|g" \
+    "$REPO_ROOT/systemd/forgejo-docker-firewall.service" \
+    > /etc/systemd/system/forgejo-docker-firewall.service
+  chmod 0644 /etc/systemd/system/forgejo-docker-firewall.service
+  systemctl daemon-reload
+  systemctl enable --now forgejo-docker-firewall.service
+  systemctl --no-pager --lines=0 status forgejo-docker-firewall.service | head -4
 else
-  echo "  [dry-run] apt-get install iptables-persistent && netfilter-persistent save"
+  echo "  [dry-run] install + enable forgejo-docker-firewall.service"
 fi
 
 say "Resulting state"

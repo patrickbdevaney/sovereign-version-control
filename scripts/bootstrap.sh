@@ -24,11 +24,33 @@ say() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 
 say "Installing packages"
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
+
+PKGS=(docker.io docker-compose-v2 docker-buildx restic curl ca-certificates)
+
+# A broken THIRD-PARTY repo (a PPA with no release for this Ubuntu version, say)
+# makes `apt-get update` exit non-zero even though the Ubuntu archive itself is
+# fine. Rather than ignore update failures wholesale -- which would hide a real
+# problem -- fail only if the packages we actually need are unavailable.
+if ! apt-get update -qq 2>/tmp/aptupd.err; then
+  echo "  apt-get update reported errors:"
+  sed 's/^/    /' /tmp/aptupd.err
+  MISSING=()
+  for p in "${PKGS[@]}"; do
+    cand="$(apt-cache policy "$p" 2>/dev/null | awk '/Candidate:/{print $2}')"
+    [ -z "$cand" ] || [ "$cand" = "(none)" ] && MISSING+=("$p")
+  done
+  if [ "${#MISSING[@]}" -gt 0 ]; then
+    echo "FATAL: these packages have no install candidate: ${MISSING[*]}" >&2
+    echo "Fix the apt sources above and re-run." >&2
+    exit 1
+  fi
+  echo "  -> the failing repo is unrelated to this build; every required"
+  echo "     package resolves from the Ubuntu archive. Continuing."
+fi
+
 # Ubuntu archive packages are current (docker 29.x, compose v2 2.40.x,
 # restic 0.18.x), so no third-party apt repo or GPG key is needed here.
-apt-get install -y -qq \
-  docker.io docker-compose-v2 docker-buildx restic curl ca-certificates
+apt-get install -y -qq "${PKGS[@]}"
 
 say "Enabling docker"
 systemctl enable --now docker
