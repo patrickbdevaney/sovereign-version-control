@@ -44,10 +44,24 @@ restic restore "$SNAP" --target "$SCRATCH"
 
 # --- 1. repository data -----------------------------------------------------
 say "Verifying restored git repositories"
-REPO_BASE="$SCRATCH/var/lib/forgejo/data/gitea-repositories"
-if [ -d "$REPO_BASE" ]; then
+# The Forgejo container image sets [repository] ROOT = /data/git/repositories,
+# which is /var/lib/forgejo/data/git/repositories on the host. It is NOT
+# "gitea-repositories" -- that is the bare-metal Gitea default.
+REPO_BASE="$SCRATCH/var/lib/forgejo/data/git/repositories"
+LIVE_REPO_COUNT="$(find /var/lib/forgejo/data/git/repositories -maxdepth 2 \
+                     -name '*.git' -type d 2>/dev/null | wc -l)"
+if [ ! -d "$REPO_BASE" ] && [ "$LIVE_REPO_COUNT" -eq 0 ]; then
+  # A brand-new instance genuinely has no repositories. That is not a backup
+  # failure -- but it does mean this run proves nothing about repository data,
+  # so say so rather than reporting a misleading pass.
+  printf '  \033[33mSKIP\033[0m  no repositories exist yet; repository restore is UNPROVEN\n'
+elif [ -d "$REPO_BASE" ]; then
   COUNT="$(find "$REPO_BASE" -maxdepth 2 -name '*.git' -type d | wc -l)"
-  ok "found $COUNT bare repositories"
+  if [ "$COUNT" -ne "$LIVE_REPO_COUNT" ]; then
+    bad "restored $COUNT repositories but the live instance has $LIVE_REPO_COUNT"
+  else
+    ok "found $COUNT bare repositories (matches live instance)"
+  fi
   BROKEN=0
   while IFS= read -r r; do
     [ -z "$r" ] && continue
@@ -60,8 +74,9 @@ if [ -d "$REPO_BASE" ]; then
   [ "$BROKEN" -eq 0 ] && ok "git fsck clean on all repositories" \
                       || bad "$BROKEN repositories failed git fsck"
 else
-  # A brand-new instance legitimately has no repositories yet.
-  bad "no gitea-repositories directory in the snapshot (expected if instance is empty)"
+  # Directory absent from the snapshot while the live instance HAS repos is a
+  # genuine backup failure.
+  bad "live instance has $LIVE_REPO_COUNT repositories but none are in the snapshot"
 fi
 
 # --- 2. database dump -------------------------------------------------------

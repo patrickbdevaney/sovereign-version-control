@@ -51,11 +51,19 @@ services:
       FORGEJO__server__ROOT_URL: ${FORGEJO_ROOT_URL}
       FORGEJO__server__OFFLINE_MODE: "true"
 
-      # Built-in SSH server. SSH_LISTEN_PORT is inside the container; SSH_PORT
-      # is what Forgejo advertises in clone URLs (the host-side port).
+      # Built-in SSH server.
+      #
+      # SSH_LISTEN_PORT must NOT be 22: the non-rootless Forgejo image already
+      # runs its own OpenSSH daemon on 22 inside the container, and Forgejo's
+      # built-in Go SSH server would collide with it --
+      #   "Failed to start SSH server: listen tcp 0.0.0.0:22: address already
+      #    in use"  -> container restart loop.
+      # Listening on 2222 inside the container sidesteps the image's sshd
+      # entirely (that daemon stays unpublished and unused).
       FORGEJO__server__START_SSH_SERVER: "true"
       FORGEJO__server__SSH_LISTEN_HOST: 0.0.0.0
-      FORGEJO__server__SSH_LISTEN_PORT: "22"
+      FORGEJO__server__SSH_LISTEN_PORT: "${FORGEJO_SSH_PORT}"
+      # Advertised in clone URLs; same value since host and container agree.
       FORGEJO__server__SSH_PORT: "${FORGEJO_SSH_PORT}"
       FORGEJO__server__SSH_DOMAIN: ${FORGEJO_SSH_DOMAIN}
       FORGEJO__server__LFS_START_SERVER: "true"
@@ -96,8 +104,8 @@ services:
       - "${LAN_IP}:3000:3000"
       # Git-over-SSH: bound on BOTH the LAN IP and the Tailscale IP so clones
       # work at home and away. Never 0.0.0.0.
-      - "${LAN_IP}:${FORGEJO_SSH_PORT}:22"
-      - "${TS_IP}:${FORGEJO_SSH_PORT}:22"
+      - "${LAN_IP}:${FORGEJO_SSH_PORT}:${FORGEJO_SSH_PORT}"
+      - "${TS_IP}:${FORGEJO_SSH_PORT}:${FORGEJO_SSH_PORT}"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:3000/api/healthz"]
       interval: 60s

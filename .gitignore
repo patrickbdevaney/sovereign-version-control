@@ -11,6 +11,10 @@
 *secret*
 *Secret*
 *SECRET*
+# ...but this script only *generates* secrets, it never contains one, and the
+# README install sequence references it. Without this exception the `*secret*`
+# rule above silently drops it from the published recipe.
+!scripts/gen-secrets.sh
 *credential*
 *password*
 .restic-password

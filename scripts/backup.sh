@@ -48,24 +48,38 @@ fi
 
 # --- database dump ----------------------------------------------------------
 # -Fc (custom format) so pg_restore can do selective/parallel restores.
-# Dumped inside the container, streamed to a root-only file on the host.
+#
+# The dump is written to a file INSIDE the container and validated there,
+# then copied out. Two reasons this is not piped through stdout:
+#   - the host has no postgresql-client, so no host-side pg_restore; and
+#   - `pg_restore --list` on a custom-format dump needs SEEKABLE input, so
+#     validating via /dev/stdin fails with "did not find magic string in file
+#     header" even when the dump is perfectly good.
+DC=(docker compose --project-directory "$REPO_ROOT")
+CTMP=/tmp/forgejo-db.dump
+
 log "dumping postgres"
-docker compose --project-directory "$REPO_ROOT" exec -T db \
-  pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc --no-owner \
-  > "$DUMP_FILE.tmp"
+"${DC[@]}" exec -T db pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+  -Fc --no-owner -f "$CTMP"
+
 # Validate before promoting: a truncated dump that still exits 0 is the classic
 # way to discover your backups were worthless only during a restore.
-if ! pg_restore --list "$DUMP_FILE.tmp" >/dev/null 2>&1; then
-  if ! docker compose --project-directory "$REPO_ROOT" exec -T db \
-        pg_restore --list /dev/stdin < "$DUMP_FILE.tmp" >/dev/null 2>&1; then
-    log "ERROR: pg_dump output failed validation; refusing to back up a bad dump"
-    rm -f "$DUMP_FILE.tmp"
-    exit 1
-  fi
+if ! "${DC[@]}" exec -T db pg_restore --list "$CTMP" >/dev/null 2>&1; then
+  log "ERROR: pg_dump output failed validation; refusing to back up a bad dump"
+  "${DC[@]}" exec -T db rm -f "$CTMP" || true
+  exit 1
 fi
-mv "$DUMP_FILE.tmp" "$DUMP_FILE"
+ENTRIES="$("${DC[@]}" exec -T db pg_restore --list "$CTMP" 2>/dev/null | grep -c ';' || true)"
+
+"${DC[@]}" cp "db:$CTMP" "$DUMP_FILE"
+"${DC[@]}" exec -T db rm -f "$CTMP" || true
 chmod 600 "$DUMP_FILE"
-log "dump ok ($(du -h "$DUMP_FILE" | cut -f1))"
+
+# The copy itself can truncate; confirm the file that landed on disk is sane.
+[ -s "$DUMP_FILE" ] || { log "ERROR: copied dump is empty"; exit 1; }
+[ "$(head -c 5 "$DUMP_FILE")" = "PGDMP" ] \
+  || { log "ERROR: copied dump lacks the PGDMP header"; exit 1; }
+log "dump ok ($(du -h "$DUMP_FILE" | cut -f1), $ENTRIES archive entries)"
 
 # --- backup -----------------------------------------------------------------
 log "backing up"

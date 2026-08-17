@@ -31,7 +31,15 @@ fi
 echo "  ok - Funnel is not configured"
 
 say "Checking HTTPS certificate availability for $FORGEJO_DOMAIN"
-if ! tailscale cert "$FORGEJO_DOMAIN" --cert-file /dev/null --key-file /dev/null 2>/tmp/tscert.err; then
+# Two gotchas here, both of which produce errors that read like "HTTPS is not
+# configured for your tailnet" when they are nothing of the sort:
+#   1. flags MUST precede the domain argument;
+#   2. --cert-file/--key-file reject /dev/null ("already exists and is not a
+#      regular file"), so write to a throwaway temp dir instead.
+CERTTMP="$(mktemp -d)"
+trap 'rm -rf "$CERTTMP"' EXIT
+if ! tailscale cert --cert-file "$CERTTMP/c.crt" --key-file "$CERTTMP/c.key" \
+        "$FORGEJO_DOMAIN" 2>/tmp/tscert.err; then
   echo "Could not obtain a certificate. This almost always means HTTPS" >&2
   echo "Certificates are not enabled for your tailnet." >&2
   echo >&2
