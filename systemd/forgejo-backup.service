@@ -1,6 +1,6 @@
 [Unit]
 Description=Forgejo encrypted backup (restic)
-Documentation=file:///opt/forgejo-infra/README.md
+Documentation=file://__REPO_ROOT__/README.md
 After=docker.service network-online.target
 Requires=docker.service
 OnFailure=forgejo-alert@%n.service

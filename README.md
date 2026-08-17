@@ -141,6 +141,7 @@ docker-compose.yml     Forgejo + Postgres, ports bound to explicit host IPs
 scripts/
   bootstrap.sh         install packages, create data dirs outside this repo
   gen-secrets.sh       generate SECRET_KEY / INTERNAL_TOKEN
+  create-admin.sh      create the admin account (web installer is disabled)
   firewall.sh          ufw + DOCKER-USER rules (LAN + tailscale0 only)
   tailscale-serve.sh   HTTPS on the tailnet; refuses to run if Funnel is on
   docker-user-rules.sh reapplies DOCKER-USER rules (docker flushes them)
@@ -173,15 +174,22 @@ sudo ./scripts/tailscale-serve.sh   # HTTPS on the tailnet
 sudo ./scripts/install-systemd.sh   # hourly backup + health, weekly verify
 ```
 
-Then create the admin account (the web installer is disabled on purpose — an
-open installer reachable on your LAN is a real exposure window):
+Then create the admin account. The web installer is disabled on purpose
+(`INSTALL_LOCK=true`) — an unlocked installer reachable on your LAN lets anyone
+who can reach it configure the instance:
 
 ```bash
-docker compose exec -u git server forgejo admin user create \
-  --admin --username <you> --email <you@example.com> --random-password
+sudo ./scripts/create-admin.sh <you> <you@example.com>
 ```
 
-Sign in and immediately enable 2FA under *Settings → Security*.
+The generated password goes to `/root/forgejo-admin-initial-password.txt`
+(mode 600) rather than to your terminal, so it stays out of scrollback and
+shell history.
+
+Sign in and immediately enable 2FA under *Settings → Security*. No mailer is
+configured, so there is **no email password reset** — recovery is
+`forgejo admin user change-password`, which needs shell access to the machine.
+Save your 2FA recovery codes somewhere off this machine.
 
 ## Networking
 
@@ -379,6 +387,28 @@ git push -u origin main
 ```
 
 `-u` sets the upstream, so afterwards plain `git push` and `git pull` work.
+
+### Push-to-create
+
+`git push` to a repository that does not exist yet creates it, for both user
+and organisation namespaces. New repositories are private by default.
+
+```bash
+git remote add origin forge:<you>/brand-new-thing.git
+git push -u origin main          # the repo is created by the push
+```
+
+This needs no API token and no scopes — git-over-SSH is not scope-gated.
+
+Note that all three settings are required together:
+`ENABLE_PUSH_CREATE_USER`, `ENABLE_PUSH_CREATE_ORG`, and
+`DEFAULT_PUSH_CREATE_PRIVATE`. The privacy setting on its own is **inert**,
+because the two enable flags default to false — a configuration that looks
+deliberate and silently does nothing.
+
+The trade-off is that a typo in a remote URL creates a repository instead of
+failing. If you prefer the strictness, set both `ENABLE_PUSH_CREATE_*` to
+`"false"` and create repositories explicitly with `forge-new`.
 
 ### Cloning something that already exists there
 

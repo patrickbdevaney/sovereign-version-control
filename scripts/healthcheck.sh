@@ -20,6 +20,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 set -a; . "$REPO_ROOT/.env"; set +a
 DISK_WARN_PCT="${DISK_WARN_PCT:-80}"
 RESTIC_WARN_BYTES="${RESTIC_WARN_BYTES:-8589934592}"
+BACKUP_MAX_AGE_HOURS="${BACKUP_MAX_AGE_HOURS:-3}"
 DATA_DIR=/var/lib/forgejo/data
 
 PROBLEMS=0
@@ -55,11 +56,15 @@ fi
 
 LAST="$(restic snapshots --tag forgejo --json 2>/dev/null | jq -r '.[-1].time // empty' 2>/dev/null || true)"
 if [ -n "$LAST" ]; then
+  # Threshold must track the BACKUP SCHEDULE. With hourly backups (plus up to
+  # 10m of RandomizedDelaySec) a healthy gap never exceeds ~70 minutes, so the
+  # old 48h limit would let backups be dead for two days without a word.
+  # 3h tolerates a couple of missed runs without crying wolf.
   AGE_H=$(( ( $(date +%s) - $(date -d "$LAST" +%s) ) / 3600 ))
-  if [ "$AGE_H" -le 48 ]; then
-    ok "most recent snapshot ${AGE_H}h old"
+  if [ "$AGE_H" -le "$BACKUP_MAX_AGE_HOURS" ]; then
+    ok "most recent snapshot ${AGE_H}h old (limit ${BACKUP_MAX_AGE_HOURS}h)"
   else
-    bad "most recent snapshot is ${AGE_H}h old (>48h) - backups may have stopped"
+    bad "most recent snapshot is ${AGE_H}h old (>${BACKUP_MAX_AGE_HOURS}h) - backups have stopped"
   fi
 else
   bad "no snapshots found in restic repository"

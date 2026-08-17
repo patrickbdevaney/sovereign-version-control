@@ -1,6 +1,6 @@
 [Unit]
-Description=Nightly Forgejo backup
-Documentation=file:///opt/forgejo-infra/README.md
+Description=Hourly Forgejo backup
+Documentation=file://__REPO_ROOT__/README.md
 
 [Timer]
 # Hourly, not nightly. A nightly-only schedule leaves up to ~24h of pushed

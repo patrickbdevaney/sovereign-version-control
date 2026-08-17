@@ -91,6 +91,12 @@ services:
       FORGEJO__cron.update_checker__ENABLED: "false"
       FORGEJO__other__SHOW_FOOTER_VERSION: "false"
       FORGEJO__repository__DEFAULT_PRIVATE: "private"
+      # Push-to-create: `git push` to a repository that does not exist yet
+      # creates it. DEFAULT_PUSH_CREATE_PRIVATE alone is INERT -- the two
+      # ENABLE_PUSH_CREATE_* flags default to false, so without them the
+      # privacy setting governs a feature that never runs.
+      FORGEJO__repository__ENABLE_PUSH_CREATE_USER: "true"
+      FORGEJO__repository__ENABLE_PUSH_CREATE_ORG: "true"
       FORGEJO__repository__DEFAULT_PUSH_CREATE_PRIVATE: "true"
       FORGEJO__log__LEVEL: Info
     volumes:
