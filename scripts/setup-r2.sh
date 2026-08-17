@@ -27,25 +27,60 @@ cat <<'INTRO'
   Switch restic backups to Cloudflare R2
 ============================================================
 
-Before starting, in the Cloudflare dashboard:
+In the Cloudflare dashboard:
 
-  1. R2 -> Create bucket. Keep it PRIVATE. Note the bucket name.
+  1. R2 -> Create bucket. Keep it PRIVATE. Remember the bucket name.
   2. R2 -> Manage R2 API Tokens -> Create API Token
        Permission: Object Read & Write
        Scope:      ONLY the bucket you just made (not "all buckets")
-     Note the Access Key ID and Secret Access Key.
-  3. Your Account ID is in the R2 sidebar (a 32-char hex string).
 
-You need four values: Account ID, bucket name, Access Key ID, Secret Key.
+Cloudflare then shows a block containing the Access Key ID, the Secret
+Access Key, and an endpoint URL. Copy that WHOLE block -- you do not need
+to pick the values out of it yourself.
+
+NOTE: your Account ID is NOT your email address. It is a 32-character hex
+string, and it is embedded in the endpoint URL, so pasting the block below
+supplies it automatically.
 INTRO
 
-read -rp $'\nAccount ID:        ' R2_ACCOUNT
-read -rp 'Bucket name:       ' R2_BUCKET
-read -rp 'Access Key ID:     ' R2_KEY_ID
-read -rsp 'Secret Access Key: ' R2_SECRET; echo
+read -rp $'\nBucket name: ' R2_BUCKET
+[ -n "$R2_BUCKET" ] || die "bucket name is required"
 
-[ -n "$R2_ACCOUNT" ] && [ -n "$R2_BUCKET" ] && [ -n "$R2_KEY_ID" ] && [ -n "$R2_SECRET" ] \
-  || die "all four values are required"
+echo
+echo "Now paste the Cloudflare credentials block, then press Ctrl-D:"
+echo "(it does not matter how it is formatted, or what order it is in)"
+BLOB="$(cat)"
+
+# Pull each value out by shape rather than by label, since Cloudflare's
+# formatting varies between the dashboard and the copy button:
+#   account id  -> the 32-hex label inside the endpoint hostname
+#   secret key  -> 64 hex chars
+#   access key  -> a 32-hex string that is NOT the account id
+R2_ACCOUNT="$(printf '%s' "$BLOB" | grep -oiE '[0-9a-f]{32}\.r2\.cloudflarestorage\.com' | head -1 | cut -d. -f1)"
+R2_SECRET="$(printf '%s' "$BLOB" | grep -oiE '\b[0-9a-f]{64}\b' | head -1)"
+R2_KEY_ID="$(printf '%s' "$BLOB" | grep -oiE '\b[0-9a-f]{32}\b' \
+             | grep -viF "${R2_ACCOUNT:-__none__}" | head -1)"
+
+# Fall back to asking for anything the paste did not yield.
+[ -n "$R2_ACCOUNT" ] || { echo; read -rp 'Account ID (32-char hex, NOT your email): ' R2_ACCOUNT; }
+[ -n "$R2_KEY_ID" ]  || { read -rp 'Access Key ID: ' R2_KEY_ID; }
+[ -n "$R2_SECRET" ]  || { read -rsp 'Secret Access Key: ' R2_SECRET; echo; }
+
+echo
+echo "Parsed:"
+printf '  bucket        %s\n' "$R2_BUCKET"
+printf '  account id    %s\n' "$R2_ACCOUNT"
+printf '  access key    %s…%s\n' "${R2_KEY_ID:0:6}" "${R2_KEY_ID: -4}"
+printf '  secret key    %s (%d chars, not shown)\n' "********" "${#R2_SECRET}"
+
+case "$R2_ACCOUNT" in
+  *@*) die "that account ID looks like an email address. It must be the 32-character hex ID from the R2 dashboard." ;;
+esac
+[ -n "$R2_ACCOUNT" ] && [ -n "$R2_KEY_ID" ] && [ -n "$R2_SECRET" ] \
+  || die "could not determine all values; re-run and enter them manually"
+
+read -rp $'\nProceed with these? [y/N] ' CONFIRM
+case "$CONFIRM" in [yY]*) ;; *) echo "aborted; nothing changed"; exit 0 ;; esac
 
 NEW_REPO="s3:https://${R2_ACCOUNT}.r2.cloudflarestorage.com/${R2_BUCKET}"
 

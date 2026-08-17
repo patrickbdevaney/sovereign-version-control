@@ -271,6 +271,24 @@ about losing it.
 The backup location is a single `.env` variable, so switching costs three
 lines and no script changes.
 
+The guided way (recommended) — asks for the bucket name, then lets you paste
+Cloudflare's credentials block verbatim and extracts the rest:
+
+```bash
+sudo ./scripts/setup-r2.sh
+```
+
+It validates the credentials before changing anything, keeps a timestamped
+`.env` backup, and refuses to report success until a real restore test passes.
+
+> **Your Account ID is not your email address.** It is a 32-character hex
+> string (e.g. `8f4b…4c7d`), visible in the dashboard URL and on the R2
+> overview page. It is also embedded in the endpoint URL Cloudflare shows you,
+> which is why pasting the whole block is enough. Using an email here produces
+> a DNS failure that does not obviously point at the cause.
+
+### Doing it by hand instead
+
 1. Cloudflare dashboard → **R2** → create a bucket (keep it **private**).
 2. **Manage R2 API Tokens** → create a token scoped to *that bucket only*,
    with **Object Read & Write**. Note the Access Key ID, Secret Access Key,
