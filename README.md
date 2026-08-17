@@ -42,10 +42,14 @@ equivalent), `forge-clone`, and `forge-doctor` (checks every link in the chain).
 Its defaults match this server: SSH port 2222, user `git`, API over the tailnet
 HTTPS name, and a LAN fallback probe against `:3000/api/healthz`.
 
-One mismatch to know about: `forge-new` creates repos under the authenticated
-**user** namespace (`POST /user/repos`). It cannot create inside an
-organisation. `forge-clone org/repo` works fine. For a single-user forge the
-simplest answer is to keep repos in your user namespace.
+Both halves accept `owner/name`, so repository layout is your choice rather
+than a consequence of tooling limits:
+
+```bash
+forge-new myproject          # -> <you>/myproject      (user namespace)
+forge-new ip/myproject       # -> ip/myproject         (organisation)
+forge-clone ip/monorepo      # organisations clone the same way
+```
 
 **A commit is only protected once it is pushed.** An unpushed local commit
 exists on exactly one disk and no backup covers it.
@@ -302,6 +306,43 @@ config load, and a crash can read as a pass.
 The tailnet hostname resolves both at home and away, so there is one URL to
 remember and one remote to configure. You do not need a VPN toggle or a
 different address depending on where you are.
+
+### API token scopes
+
+Anything that creates repositories goes through the API and therefore needs a
+token, created at **Settings → Applications → Generate New Token**. Which
+scopes you need depends on where repositories live:
+
+| Scope | Needed for |
+|---|---|
+| `write:user` | reading your account, registering SSH keys |
+| `write:repository` | creating repositories in your own namespace |
+| `write:organization` | **creating repositories inside an organisation** |
+
+The third one is the trap. A token carrying only the first two authenticates
+perfectly well and then fails *only* on organisation creation:
+
+```
+POST /orgs/<org>/repos  ->  403
+{"message":"token does not have at least one of required scope(s): [write:organization]"}
+```
+
+That reads like an authentication problem and is not one — the token is valid,
+it simply lacks that scope. Tokens cannot be edited after creation, so add the
+scope up front or regenerate.
+
+**Git-over-SSH needs no scope at all.** Cloning, pulling and pushing to an
+organisation repository work with nothing but a registered SSH key; only the
+API create path is scope-gated. If pushes work but creating a repo fails, this
+is why.
+
+Store the token mode 600 — the client tooling checks and warns otherwise:
+
+```bash
+install -d -m 700 ~/.config/forge
+printf '%s' 'YOUR_TOKEN' > ~/.config/forge/token
+chmod 600 ~/.config/forge/token
+```
 
 ### One-time laptop setup
 
