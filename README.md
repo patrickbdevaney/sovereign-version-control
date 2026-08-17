@@ -7,6 +7,49 @@ nowhere else. No port forwarding, no Funnel, no public exposure of any kind.
 Infrastructure-as-code only. This repository contains no data, no secrets, and
 no machine-specific values.
 
+## The whole system
+
+Three parts. This repository is the middle one.
+
+```
+  ┌─────────────────────────────────────────────────────────────┐
+  │  CLIENT — your laptop                                       │
+  │  working copy, plaintext                                    │
+  │  forge-setup / forge-new / forge-clone / forge-doctor       │
+  └────────────────────────┬────────────────────────────────────┘
+                           │  git push over SSH :2222
+                           │  (tailnet anywhere, or LAN at home)
+                           ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │  FORGE — this repository                                    │
+  │  Forgejo + Postgres, /var/lib/forgejo, plaintext at rest    │
+  │  LAN 192.168.x.x:3000 (HTTP) + tailnet HTTPS (real cert)    │
+  │  private by default; no port forward, no Funnel             │
+  └────────────────────────┬────────────────────────────────────┘
+                           │  hourly; restic ENCRYPTS HERE
+                           ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │  BACKUP — Cloudflare R2 / Backblaze B2 / local disk         │
+  │  ciphertext only; provider cannot read it                   │
+  │  restore proven by scripts/restore-test.sh, not assumed     │
+  └─────────────────────────────────────────────────────────────┘
+```
+
+The client tooling lives in a separate repository:
+**[sovereign-version-control-client](https://github.com/patrickbdevaney/sovereign-version-control-client)**
+— `forge-setup` (key + SSH alias + register), `forge-new` (the `gh repo create`
+equivalent), `forge-clone`, and `forge-doctor` (checks every link in the chain).
+Its defaults match this server: SSH port 2222, user `git`, API over the tailnet
+HTTPS name, and a LAN fallback probe against `:3000/api/healthz`.
+
+One mismatch to know about: `forge-new` creates repos under the authenticated
+**user** namespace (`POST /user/repos`). It cannot create inside an
+organisation. `forge-clone org/repo` works fine. For a single-user forge the
+simplest answer is to keep repos in your user namespace.
+
+**A commit is only protected once it is pushed.** An unpushed local commit
+exists on exactly one disk and no backup covers it.
+
 ---
 
 ## Threat model
@@ -20,9 +63,44 @@ decide whether it matches your needs.
 | Untrusted devices on your LAN | Partly | Ports are restricted to the LAN subnet, but any device on that subnet can reach the web UI over plain HTTP. |
 | Passive network snooping on LAN | **No** | The LAN path is HTTP. See "HTTPS trade-off" below. |
 | Compromised router or switch | **No** | A hostile gateway can read the LAN HTTP path. Use the tailnet URL if this concerns you. |
-| Accidental deletion, bad upgrade, DB corruption | Yes | Nightly restic snapshots with 14/8/12 retention. |
+| Accidental deletion, bad upgrade, DB corruption | Yes | Hourly restic snapshots, 48h of hourly granularity then 14/8/12. |
 | Disk failure, theft, fire | **Only with an offsite target** | A restic repository on the same machine dies with the machine. See "Backups". |
 | Secrets leaking into this public repo | Yes | Three-layer pre-commit guard, see "Secret hygiene". |
+| **Physical theft of the forge machine** | **No** | The disk is not encrypted. Whoever holds the drive reads every repository, and `.env` — which contains the backup password. See "Where your code lives". |
+
+## Where your code lives, and what is actually encrypted
+
+Three copies exist. Only one of them is encrypted, and knowing which matters.
+
+| Copy | State at rest | How you read it |
+|---|---|---|
+| Laptop working copy | **Plaintext** | Open the files |
+| Forge, `/var/lib/forgejo` | **Plaintext** | Web UI, `git clone`, or straight off the disk |
+| Backup repository (R2/B2/local) | **Ciphertext** | `restic restore`, with `RESTIC_PASSWORD` |
+
+**Compression is not encryption.** Git objects are zlib-compressed, which makes
+them unreadable in a text editor and perfectly readable to `git`. Nothing on
+the forge is encrypted at rest.
+
+Only the backup is genuinely encrypted, because restic encrypts *before* upload.
+That is the whole reason an untrusted storage provider is acceptable: Cloudflare
+or Backblaze holds ciphertext and cannot read a byte of it.
+
+### The consequence: physical access
+
+The forge machine's disk is **not** encrypted in this setup. File permissions
+(`root:root`, mode 0750) stop other users on a running system. They stop nobody
+holding the drive.
+
+If the machine is stolen, the thief gets every repository, its full history,
+and `.env` — which contains the restic password, so the backups come with it.
+
+This is a normal trade-off for an always-on home server, and it is stated here
+rather than hidden. If the hosted code is valuable enough to matter, the fix is
+full-disk encryption (LUKS), with the caveat that an encrypted root needs a
+passphrase at every boot — which fights with "always-on and headless". A middle
+path is encrypting only `/var/lib/forgejo` and unlocking it manually after a
+reboot.
 
 ## HTTPS trade-off — read this
 
@@ -61,8 +139,10 @@ scripts/
   gen-secrets.sh       generate SECRET_KEY / INTERNAL_TOKEN
   firewall.sh          ufw + DOCKER-USER rules (LAN + tailscale0 only)
   tailscale-serve.sh   HTTPS on the tailnet; refuses to run if Funnel is on
+  docker-user-rules.sh reapplies DOCKER-USER rules (docker flushes them)
   backup.sh            pg_dump + restic, encrypted client-side
   restore-test.sh      proves a backup actually restores
+  setup-r2.sh          guided migration of backups to Cloudflare R2
   healthcheck.sh       containers, HTTP, backup freshness, disk, still-private
   alert.sh             failure notifier (log + desktop + wall)
   install-systemd.sh   install timers, substituting the real repo path
@@ -86,7 +166,7 @@ sudo ./scripts/firewall.sh          # dry run first — review the output
 sudo ./scripts/firewall.sh --apply
 docker compose up -d
 sudo ./scripts/tailscale-serve.sh   # HTTPS on the tailnet
-sudo ./scripts/install-systemd.sh   # nightly backup + hourly health
+sudo ./scripts/install-systemd.sh   # hourly backup + health, weekly verify
 ```
 
 Then create the admin account (the web installer is disabled on purpose — an
@@ -119,9 +199,18 @@ chain. A `ufw deny 3000` does **not** block a Docker-published port. Guides that
 stop at `ufw allow from <subnet>` leave you exposed while looking secure.
 
 Two things actually constrain reachability here: binding each port to a specific
-host IP, and the `DOCKER-USER` chain rules that `firewall.sh` installs. Those
-raw rules do not survive a reboot on their own, so the script also persists them
-via `iptables-persistent`.
+host IP, and the `DOCKER-USER` chain rules that `firewall.sh` installs.
+
+Those raw rules do not survive on their own — and Docker **flushes DOCKER-USER
+every time the daemon starts**, so they must be *reapplied*, not merely saved.
+That is what `forgejo-docker-firewall.service` (ordered `After=docker.service`)
+does.
+
+> **Do not reach for `iptables-persistent` here.** On Ubuntu 25.10 that package
+> conflicts with ufw, and apt resolves the conflict by **removing ufw** — which
+> silently leaves the host with `INPUT ACCEPT` and no inbound filtering at all,
+> while appearing to have just improved your firewall. This was hit during the
+> original build.
 
 ## Backups
 
@@ -140,7 +229,28 @@ were worthless only when you needed them.
 This repository is deliberately **not** backed up: it lives in git and already
 has another copy.
 
-Retention: `--keep-daily 14 --keep-weekly 8 --keep-monthly 12`.
+### Schedule and retention
+
+Backups run **hourly**, not nightly. A nightly-only schedule leaves up to ~24
+hours of pushed work with no offsite copy. restic deduplicates, so a run with
+nothing new uploads almost nothing — an idle hourly run is a handful of API
+calls, far inside R2's free tier of 1M class-A operations per month.
+
+Retention: `--keep-hourly 48 --keep-daily 14 --keep-weekly 8 --keep-monthly 12`.
+
+**`--keep-hourly` is not optional here, and leaving it out is a silent trap.**
+`restic forget` keeps only the *last* snapshot of each day to satisfy
+`--keep-daily`. Pair an hourly schedule with a daily-only policy and every run
+discards the previous hour: you get freshness but lose the ability to roll back
+to earlier the same day — exactly what you need after an accidental deletion or
+a bad force-push. Check any policy with `restic forget --dry-run`, which prints
+what it would keep and why.
+
+For the same reason `backup.sh` runs `forget` **without** `--prune`. Prune
+repacks the repository and is the expensive half; under an hourly schedule it
+would run every hour. It happens on the weekly `forgejo-verify` timer instead.
+Forgotten snapshots stop being visible immediately; prune is only what reclaims
+their space.
 
 ### The repository password
 
@@ -258,7 +368,7 @@ Only once it reaches the forge. The chain is:
 ```
 laptop working copy  --git push-->  Forgejo (/var/lib/forgejo/data)
                                         |
-                              nightly 02:30, restic, encrypted here
+                        hourly, restic encrypts BEFORE upload
                                         v
                                  backup repository
 ```
@@ -321,7 +431,7 @@ stays encrypted under the old password.
 
 The free tier is 10 GB. `restic stats --mode raw-data` reports actual usage,
 and `healthcheck.sh` warns at the `RESTIC_WARN_BYTES` threshold so you get
-notice before a nightly run starts failing. What blows past 10 GB is binary
+notice before a scheduled run starts failing. What blows past 10 GB is binary
 content — Git LFS assets, committed `node_modules`, large PDFs — not source.
 
 Note that a remote target replaces the local one. To keep both, run
