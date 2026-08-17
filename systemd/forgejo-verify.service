@@ -8,6 +8,10 @@ Type=oneshot
 # `restic check` alone validates structure only. --read-data-subset actually
 # reads and re-hashes a slice of the pack files, which is what catches silent
 # corruption. 10% weekly covers the whole repository over ~10 weeks.
+# Prune first, then verify. backup.sh deliberately runs `forget` WITHOUT
+# --prune (it would repack every hour), so this is where forgotten snapshots
+# actually stop consuming space.
+ExecStart=/bin/bash -c 'set -a; . __REPO_ROOT__/.env; set +a; restic prune'
 ExecStart=/bin/bash -c 'set -a; . __REPO_ROOT__/.env; set +a; exec restic check --read-data-subset=10%%'
 User=root
 Nice=15

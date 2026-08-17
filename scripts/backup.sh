@@ -23,6 +23,7 @@ set -a; . "$REPO_ROOT/.env"; set +a
 
 : "${RESTIC_REPOSITORY:?}"; : "${RESTIC_PASSWORD:?}"
 : "${POSTGRES_USER:?}";     : "${POSTGRES_DB:?}"
+RETENTION_HOURLY="${RETENTION_HOURLY:-48}"
 RETENTION_DAILY="${RETENTION_DAILY:-14}"
 RETENTION_WEEKLY="${RETENTION_WEEKLY:-8}"
 RETENTION_MONTHLY="${RETENTION_MONTHLY:-12}"
@@ -93,13 +94,25 @@ restic backup \
   "$DATA_DIR" "$DUMP_FILE" "$REPO_ROOT/.env"
 
 # --- retention --------------------------------------------------------------
-log "applying retention (daily=$RETENTION_DAILY weekly=$RETENTION_WEEKLY monthly=$RETENTION_MONTHLY)"
+#
+# --keep-hourly is REQUIRED given the hourly schedule. `restic forget` keeps
+# only the LAST snapshot of each day for --keep-daily, so an hourly job with
+# no --keep-hourly deletes the previous hour's snapshot every single run: you
+# get freshness but lose the ability to roll back to earlier the same day,
+# which is exactly what you want after an accidental delete or a bad
+# force-push.
+#
+# NOTE: no --prune here. Prune repacks the repository and is the expensive
+# half; under an hourly schedule it would run every hour. It is done on the
+# weekly forgejo-verify timer instead. Snapshots forgotten here stop being
+# visible immediately; prune is only what reclaims their space.
+log "applying retention (hourly=$RETENTION_HOURLY daily=$RETENTION_DAILY weekly=$RETENTION_WEEKLY monthly=$RETENTION_MONTHLY)"
 restic forget \
   --tag forgejo \
+  --keep-hourly "$RETENTION_HOURLY" \
   --keep-daily "$RETENTION_DAILY" \
   --keep-weekly "$RETENTION_WEEKLY" \
-  --keep-monthly "$RETENTION_MONTHLY" \
-  --prune
+  --keep-monthly "$RETENTION_MONTHLY"
 
 # --- integrity --------------------------------------------------------------
 # Structural check every run; it is cheap. A full --read-data pass is far more
