@@ -43,8 +43,19 @@ string, and it is embedded in the endpoint URL, so pasting the block below
 supplies it automatically.
 INTRO
 
-read -rp $'\nBucket name: ' R2_BUCKET
+# Non-secret values may be preset in the environment so that only the actual
+# credentials need to be typed:
+#   sudo R2_BUCKET=my-bucket R2_ACCOUNT=<32-hex> ./scripts/setup-r2.sh
+R2_BUCKET="${R2_BUCKET:-}"
+R2_ACCOUNT_PRESET="${R2_ACCOUNT:-}"
+
+if [ -n "$R2_BUCKET" ]; then
+  echo; echo "Bucket name (preset): $R2_BUCKET"
+else
+  read -rp $'\nBucket name: ' R2_BUCKET
+fi
 [ -n "$R2_BUCKET" ] || die "bucket name is required"
+[ -n "$R2_ACCOUNT_PRESET" ] && echo "Account ID  (preset): $R2_ACCOUNT_PRESET"
 
 echo
 echo "Now paste the Cloudflare credentials block, then press Ctrl-D:"
@@ -56,7 +67,7 @@ BLOB="$(cat)"
 #   account id  -> the 32-hex label inside the endpoint hostname
 #   secret key  -> 64 hex chars
 #   access key  -> a 32-hex string that is NOT the account id
-R2_ACCOUNT="$(printf '%s' "$BLOB" | grep -oiE '[0-9a-f]{32}\.r2\.cloudflarestorage\.com' | head -1 | cut -d. -f1)"
+R2_ACCOUNT="${R2_ACCOUNT_PRESET:-$(printf '%s' "$BLOB" | grep -oiE '[0-9a-f]{32}\.r2\.cloudflarestorage\.com' | head -1 | cut -d. -f1)}"
 R2_SECRET="$(printf '%s' "$BLOB" | grep -oiE '\b[0-9a-f]{64}\b' | head -1)"
 R2_KEY_ID="$(printf '%s' "$BLOB" | grep -oiE '\b[0-9a-f]{32}\b' \
              | grep -viF "${R2_ACCOUNT:-__none__}" | head -1)"
