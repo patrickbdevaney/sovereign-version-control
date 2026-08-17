@@ -107,13 +107,25 @@ restic backup \
 # half; under an hourly schedule it would run every hour. It is done on the
 # weekly forgejo-verify timer instead. Snapshots forgotten here stop being
 # visible immediately; prune is only what reclaims their space.
-log "applying retention (hourly=$RETENTION_HOURLY daily=$RETENTION_DAILY weekly=$RETENTION_WEEKLY monthly=$RETENTION_MONTHLY)"
-restic forget \
-  --tag forgejo \
-  --keep-hourly "$RETENTION_HOURLY" \
-  --keep-daily "$RETENTION_DAILY" \
-  --keep-weekly "$RETENTION_WEEKLY" \
-  --keep-monthly "$RETENTION_MONTHLY"
+if [ "${RESTIC_APPEND_ONLY:-false}" = "true" ]; then
+  # Immutable target (e.g. an R2 bucket lock). `forget` deletes snapshot
+  # objects, so it CANNOT succeed against a locked bucket -- attempting it
+  # would fail the run and fire an alert every hour.
+  #
+  # This is the deliberate trade: the backup becomes append-only, so a
+  # compromised forge cannot destroy history, and in exchange nothing is ever
+  # reclaimed automatically. For mostly-text repositories that is tens of MB
+  # per year. Prune manually from a trusted machine if it ever matters.
+  log "append-only mode: skipping retention (target is immutable)"
+else
+  log "applying retention (hourly=$RETENTION_HOURLY daily=$RETENTION_DAILY weekly=$RETENTION_WEEKLY monthly=$RETENTION_MONTHLY)"
+  restic forget \
+    --tag forgejo \
+    --keep-hourly "$RETENTION_HOURLY" \
+    --keep-daily "$RETENTION_DAILY" \
+    --keep-weekly "$RETENTION_WEEKLY" \
+    --keep-monthly "$RETENTION_MONTHLY"
+fi
 
 # --- integrity --------------------------------------------------------------
 # Structural check every run; it is cheap. A full --read-data pass is far more

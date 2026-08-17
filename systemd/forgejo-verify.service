@@ -11,7 +11,10 @@ Type=oneshot
 # Prune first, then verify. backup.sh deliberately runs `forget` WITHOUT
 # --prune (it would repack every hour), so this is where forgotten snapshots
 # actually stop consuming space.
-ExecStart=/bin/bash -c 'set -a; . __REPO_ROOT__/.env; set +a; restic prune'
+# Prune is skipped when the target is immutable (RESTIC_APPEND_ONLY=true):
+# it deletes pack files, which a bucket lock forbids, so running it would fail
+# the unit every week rather than reclaiming anything.
+ExecStart=/bin/bash -c 'set -a; . __REPO_ROOT__/.env; set +a; [ "${RESTIC_APPEND_ONLY:-false}" = "true" ] && { echo "append-only: skipping prune"; exit 0; }; restic prune'
 ExecStart=/bin/bash -c 'set -a; . __REPO_ROOT__/.env; set +a; exec restic check --read-data-subset=10%%'
 User=root
 Nice=15

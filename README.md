@@ -148,6 +148,7 @@ scripts/
   backup.sh            pg_dump + restic, encrypted client-side
   restore-test.sh      proves a backup actually restores
   setup-r2.sh          guided migration of backups to Cloudflare R2
+  recovery-sheet.sh    printable off-machine recovery document
   healthcheck.sh       containers, HTTP, backup freshness, disk, still-private
   alert.sh             failure notifier (log + desktop + wall)
   install-systemd.sh   install timers, substituting the real repo path
@@ -272,6 +273,63 @@ cost of that guarantee is absolute:
 > **If `RESTIC_PASSWORD` exists only on this machine, and this machine dies,
 > every backup is permanently unrecoverable.** There is no reset and no
 > recovery. Store it in a password manager, today.
+
+### Protecting backups from a compromised forge
+
+By default the forge holds credentials that can both write *and delete* in the
+backup repository. That means one machine's compromise can destroy both copies:
+ransomware, or an attacker with root, wipes the repositories and then deletes
+the backups using the keys sitting in `.env`.
+
+Physical risks do not correlate this way — a fire takes the forge and not the
+offsite copy. This is specifically the malice-or-catastrophic-mistake path.
+
+**Cloudflare R2 bucket locks** close it. A lock prevents deletion and
+overwriting for a chosen period, and changing it requires a token with
+*bucket configuration* permission — which the forge's Object Read & Write token
+does not have. A compromised forge therefore cannot remove its own protection.
+
+The trade-off is real and unavoidable: `restic forget` deletes snapshot objects
+and `prune` deletes pack files, so **neither can run against a locked bucket**.
+You cannot have automatic retention and immutability on the same objects.
+
+Set `RESTIC_APPEND_ONLY=true` in `.env` and both are skipped rather than
+failing the run every hour. Nothing is reclaimed automatically; for
+mostly-text repositories that is tens of megabytes a year against a 10 GB free
+tier, so it is usually the right trade. Prune manually from a trusted machine
+if it ever matters.
+
+To enable, in the Cloudflare dashboard: **R2 → your bucket → Settings →
+Bucket lock rules → Add rule**, applying to all objects, with a retention
+period you are happy to be unable to undo. Then:
+
+```bash
+$EDITOR .env          # RESTIC_APPEND_ONLY=true
+sudo ./scripts/backup.sh          # confirm it still succeeds
+```
+
+A bucket cannot be emptied while any lock rule exists, which is the point.
+Choose the retention period deliberately — a long one protects you from an
+attacker and equally from yourself.
+
+### The recovery sheet
+
+```bash
+sudo ./scripts/recovery-sheet.sh
+```
+
+Generates a printable page containing the restic password, the repository
+location, the storage keys, the admin credentials, and the full rebuild
+procedure — everything needed to reconstruct the forge on hardware that does
+not exist yet.
+
+This exists because the restic password lives in `.env`, on the machine being
+backed up. That is not a second copy: the failure that destroys the forge
+destroys the only key to its backups at the same moment. Paper is a legitimate
+answer here — it does not depend on a vendor, a subscription, a master password
+you might also lose, or a device that boots.
+
+Print it, store it somewhere physical, then `shred -u recovery-sheet.txt`.
 
 ### Verifying
 

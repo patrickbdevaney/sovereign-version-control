@@ -22,6 +22,7 @@
 # machine, must never be published. Uppercase names are NOT matched by the
 # lowercase *credential* rule above, so it is listed explicitly.
 CREDENTIALS.local.md
+recovery-sheet.txt
 *.local.md
 b2_*
 authorized_keys
