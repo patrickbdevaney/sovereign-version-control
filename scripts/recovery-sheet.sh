@@ -16,18 +16,26 @@
 # Print this. Put it somewhere physical. Then delete the file.
 set -euo pipefail
 
-[ "$(id -u)" -eq 0 ] || { echo "must run as root: sudo $0" >&2; exit 1; }
-
+# Root is NOT required. Everything comes from .env (owned by the repo owner);
+# the admin password is read from /root when available and from
+# CREDENTIALS.local.md otherwise. Requiring sudo for a document you need most
+# when things are broken is the wrong dependency.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+[ -r "$REPO_ROOT/.env" ] || { echo "cannot read $REPO_ROOT/.env" >&2; exit 1; }
 set -a; . "$REPO_ROOT/.env"; set +a
 
 OUT="$REPO_ROOT/recovery-sheet.txt"
 TO_STDOUT=0
 [ "${1:-}" = "--stdout" ] && TO_STDOUT=1
 
-ADMIN_PW="(not found)"
-[ -f /root/forgejo-admin-initial-password.txt ] \
-  && ADMIN_PW="$(cat /root/forgejo-admin-initial-password.txt)"
+ADMIN_PW="(not found — reset with: forgejo admin user change-password)"
+if [ -r /root/forgejo-admin-initial-password.txt ]; then
+  ADMIN_PW="$(cat /root/forgejo-admin-initial-password.txt)"
+elif [ -r "$REPO_ROOT/CREDENTIALS.local.md" ]; then
+  # Same value, recorded where the repo owner can reach it without sudo.
+  FOUND="$(grep -oP '^\| Password \| `\K[^`]+' "$REPO_ROOT/CREDENTIALS.local.md" | head -1)"
+  [ -n "$FOUND" ] && ADMIN_PW="$FOUND"
+fi
 
 render() {
 cat <<EOF
