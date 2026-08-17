@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly Forgejo health check
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=5m
+Persistent=true
+Unit=forgejo-health.service
+
+[Install]
+WantedBy=timers.target

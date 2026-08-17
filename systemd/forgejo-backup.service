@@ -1,0 +1,31 @@
+[Unit]
+Description=Forgejo encrypted backup (restic)
+Documentation=file:///opt/forgejo-infra/README.md
+After=docker.service network-online.target
+Requires=docker.service
+OnFailure=forgejo-alert@%n.service
+
+[Service]
+Type=oneshot
+# __REPO_ROOT__ is substituted by scripts/install-systemd.sh
+ExecStart=__REPO_ROOT__/scripts/backup.sh
+User=root
+# Backups are IO-heavy; stay out of the way of interactive use.
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=4h
+
+# Hardening. The script needs root to read Forgejo data and talk to docker.sock,
+# but nothing beyond that.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

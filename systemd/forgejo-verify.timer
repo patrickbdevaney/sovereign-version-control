@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly restic deep verification
+
+[Timer]
+OnCalendar=Sun *-*-* 04:00:00
+RandomizedDelaySec=30m
+Persistent=true
+Unit=forgejo-verify.service
+
+[Install]
+WantedBy=timers.target

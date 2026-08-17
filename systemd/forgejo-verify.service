@@ -1,0 +1,21 @@
+[Unit]
+Description=Weekly restic deep verification (reads actual pack data)
+After=docker.service
+OnFailure=forgejo-alert@%n.service
+
+[Service]
+Type=oneshot
+# `restic check` alone validates structure only. --read-data-subset actually
+# reads and re-hashes a slice of the pack files, which is what catches silent
+# corruption. 10% weekly covers the whole repository over ~10 weeks.
+ExecStart=/bin/bash -c 'set -a; . __REPO_ROOT__/.env; set +a; exec restic check --read-data-subset=10%%'
+User=root
+Nice=15
+IOSchedulingClass=idle
+TimeoutStartSec=6h
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

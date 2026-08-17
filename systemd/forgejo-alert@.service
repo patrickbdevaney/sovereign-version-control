@@ -1,0 +1,8 @@
+[Unit]
+Description=Alert on failure of %i
+
+[Service]
+Type=oneshot
+# %i is the failed unit name, passed in by OnFailure=forgejo-alert@%n.service
+ExecStart=__REPO_ROOT__/scripts/alert.sh %i
+User=root

@@ -1,0 +1,16 @@
+[Unit]
+Description=Forgejo health check
+After=docker.service
+OnFailure=forgejo-alert@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=__REPO_ROOT__/scripts/healthcheck.sh
+User=root
+TimeoutStartSec=5m
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target
