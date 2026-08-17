@@ -63,7 +63,10 @@ regexTarget = "line"
 regexes = [
   '''REPLACE_ME''',
   '''CHANGEME''',
-  '''\$\{[A-Za-z_][A-Za-z0-9_]*\}''',   # ${VAR} indirection, never a literal
+  # Shell parameter expansion is never a literal secret. Deliberately does not
+  # require the closing brace, so the :- :? :+ := forms are covered too --
+  # ${RESTIC_PASSWORD:?msg} would otherwise be flagged as a hardcoded value.
+  '''\$\{[A-Za-z_][A-Za-z0-9_]*''',
   '''<your-[a-z-]+>''',                 # <your-tailnet> style placeholders
   '''192\.168\.x\.''',                  # documented placeholder subnet
   '''100\.x\.x\.x''',

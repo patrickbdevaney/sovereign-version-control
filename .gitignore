@@ -18,6 +18,11 @@
 *credential*
 *password*
 .restic-password
+# Local "how do I get back in" file. Holds real passwords, lives only on this
+# machine, must never be published. Uppercase names are NOT matched by the
+# lowercase *credential* rule above, so it is listed explicitly.
+CREDENTIALS.local.md
+*.local.md
 b2_*
 authorized_keys
 id_rsa*

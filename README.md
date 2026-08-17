@@ -187,6 +187,129 @@ Note that gitleaks uses RE2, which has **no lookahead support**. Exclusions
 belong in an allowlist; a `(?!...)` in a rule regex makes gitleaks panic at
 config load, and a crash can read as a pass.
 
+## Daily use from a laptop
+
+The tailnet hostname resolves both at home and away, so there is one URL to
+remember and one remote to configure. You do not need a VPN toggle or a
+different address depending on where you are.
+
+### One-time laptop setup
+
+Add your SSH public key at **Settings → SSH / GPG Keys** in the web UI, then
+tell SSH which port to use so you never have to type it again:
+
+```sshconfig
+# ~/.ssh/config
+Host forge
+    HostName <your-machine>.<your-tailnet>.ts.net
+    User git
+    Port 2222
+    IdentityFile ~/.ssh/id_ed25519
+```
+
+Verify:
+
+```bash
+ssh -T forge          # expect a Forgejo greeting, not a shell
+```
+
+### Starting a new project locally, then pushing to your forge
+
+```bash
+mkdir myproject && cd myproject
+git init -b main
+# ... write code ...
+git add -A && git commit -m "Initial commit"
+
+# Create the repo on the forge first (web UI: + -> New Repository),
+# then point this working copy at it:
+git remote add origin forge:<org-or-user>/myproject.git
+git push -u origin main
+```
+
+`-u` sets the upstream, so afterwards plain `git push` and `git pull` work.
+
+### Cloning something that already exists there
+
+```bash
+git clone forge:<org>/<repo>.git
+```
+
+### Using both this forge and GitHub from one working copy
+
+Useful when the forge is the private source of truth and GitHub holds a public
+subset. Keep them as separate named remotes and push deliberately:
+
+```bash
+git remote add origin forge:<org>/<repo>.git      # private, authoritative
+git remote add github git@github.com:<you>/<repo>.git
+
+git push origin main      # to your own forge
+git push github main      # to GitHub, only when you mean to
+```
+
+Never make GitHub the default upstream for a private repo. `git push` with no
+argument should always go somewhere you control.
+
+### Does a laptop commit end up in the backup?
+
+Only once it reaches the forge. The chain is:
+
+```
+laptop working copy  --git push-->  Forgejo (/var/lib/forgejo/data)
+                                        |
+                              nightly 02:30, restic, encrypted here
+                                        v
+                                 backup repository
+```
+
+An unpushed local commit is not backed up by anything. Push before you care
+about losing it.
+
+## Moving backups to Cloudflare R2 (or any S3 target)
+
+The backup location is a single `.env` variable, so switching costs three
+lines and no script changes.
+
+1. Cloudflare dashboard → **R2** → create a bucket (keep it **private**).
+2. **Manage R2 API Tokens** → create a token scoped to *that bucket only*,
+   with **Object Read & Write**. Note the Access Key ID, Secret Access Key,
+   and your Account ID.
+3. Edit `.env`:
+
+```bash
+RESTIC_REPOSITORY=s3:https://<account_id>.r2.cloudflarestorage.com/<bucket>
+AWS_ACCESS_KEY_ID=<access_key_id>
+AWS_SECRET_ACCESS_KEY=<secret_access_key>
+AWS_DEFAULT_REGION=auto
+```
+
+`AWS_DEFAULT_REGION=auto` is **required**. R2 has no meaningful region, but
+omitting it produces confusing SigV4 signing errors rather than a clear
+message.
+
+4. Initialise and verify:
+
+```bash
+set -a; source .env; set +a
+restic init                       # new repository at the new location
+sudo ./scripts/backup.sh          # first upload
+sudo ./scripts/restore-test.sh    # prove it restores BEFORE trusting it
+```
+
+Keep the **same** `RESTIC_PASSWORD` if you want one password for both, or
+generate a new one — but then store *both*, since the old local repository
+stays encrypted under the old password.
+
+The free tier is 10 GB. `restic stats --mode raw-data` reports actual usage,
+and `healthcheck.sh` warns at the `RESTIC_WARN_BYTES` threshold so you get
+notice before a nightly run starts failing. What blows past 10 GB is binary
+content — Git LFS assets, committed `node_modules`, large PDFs — not source.
+
+Note that a remote target replaces the local one. To keep both, run
+`backup.sh` twice with different `RESTIC_REPOSITORY` values, or keep the local
+repository as the fast restore path and the remote as disaster recovery.
+
 ## Restoring onto a new machine
 
 1. Install Docker and restic; clone this repository.
